@@ -46,6 +46,7 @@ image = (
         "nvidia/cuda:12.9.1-devel-ubuntu22.04",
         add_python="3.12",
     )
+    .env({"HF_ENDPOINT": "https://hf-mirror.com"})
     .uv_sync(extras=["gpu"])
     .workdir(REMOTE_ROOT)
     .add_local_dir("cs336_alignment", f"{REMOTE_ROOT}/cs336_alignment")

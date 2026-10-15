@@ -14,8 +14,11 @@ python scripts/evaluate_safety.py \
 import argparse
 import json
 import logging
+import os
 import sys
 from statistics import mean
+
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
 
 from tqdm import tqdm
 from transformers import AutoTokenizer

@@ -118,7 +118,7 @@ def make_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-    args = make_parser().parse_args()
+    args = make_parser().parse_args() #获取输入的参数
     if torch.cuda.device_count() < 2:
         raise RuntimeError("GRPO training needs GPU 0 for the policy and GPU 1 for vLLM.")
     if args.group_size < 2 or args.rollout_batch_size < 1:
@@ -135,7 +135,7 @@ def main() -> None:
     train_examples = read_gsm8k(args.train_file, args.n_train_examples, args.seed)
     val_examples = read_gsm8k(args.val_file, args.n_val_examples, args.seed)
     prompt_template = args.prompt_file.read_text(encoding="utf-8")
-    use_answer_stop = "<answer>" in prompt_template
+    use_answer_stop = "<answer>" in prompt_template  #布尔值
     from cs336_alignment.drgrpo_grader import question_only_reward_fn, r1_zero_reward_fn
 
     reward_fn = r1_zero_reward_fn if use_answer_stop else question_only_reward_fn

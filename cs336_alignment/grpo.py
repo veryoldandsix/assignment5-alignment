@@ -118,7 +118,7 @@ def compute_policy_gradient_loss(
         raise NotImplementedError("Section 4 implements on-policy GRPO only.")
     if raw_rewards_or_advantages.numel() != policy_log_probs.shape[0]:
         raise ValueError("One reward or advantage is required per response.")
-    advantages = raw_rewards_or_advantages.reshape(-1, 1) #把advantages展开成一维tensor
+    advantages = raw_rewards_or_advantages.reshape(-1, 1) #把advantages展开成二维的tensor 
     return -advantages * policy_log_probs, {} #矩阵乘法
 
 

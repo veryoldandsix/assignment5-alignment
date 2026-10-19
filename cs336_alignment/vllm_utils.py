@@ -177,7 +177,7 @@ def stop_server(process: subprocess.Popen | None, timeout: int = 30) -> None:
         process.wait()
 
 
-def generate_completions(
+def generate_completions( #请求生成回答
     vllm_base_url: str,
     model_id: str,
     prompts: list[str],

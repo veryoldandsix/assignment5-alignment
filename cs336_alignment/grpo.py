@@ -143,7 +143,7 @@ def grpo_train_step(
     optimizer: torch.optim.Optimizer,# 优化器
     gradient_accumulation_steps: int, #梯度积累的个数
     max_grad_norm: float | None, 
-    reward_fn: Callable[[str, str], dict[str, float]],
+    reward_fn: Callable[[str, str], dict[str, float]], #woc我知道了 这个是一个函数 callable 对应输入一个str str得到一个对应评分的字典
     repeated_prompts: list[str], #重复的提示词 为什么会重复因为希望提示词和回答一一对应
     rollout_responses: list[str], #同一个问题生成的不同回答
     repeated_ground_truths: list[str], #重复的真正答案

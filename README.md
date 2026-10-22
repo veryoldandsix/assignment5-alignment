@@ -51,3 +51,12 @@ Each run writes `metrics.jsonl`, sampled `rollouts.jsonl`, and a final model
 checkpoint under the output directory. Add `--wandb-project NAME` to log the
 same metrics to Weights & Biases.
 
+The training script starts vLLM on an automatically selected free port. It
+checks the weight-sync endpoint as well as `/health` before training, so an
+unrelated service on port 8000 cannot be mistaken for vLLM. When connecting to
+an existing server with `VLLMServer(launch_server=False, port=...)`, provide its
+port and start that server with `VLLM_SERVER_DEV_MODE=1` and
+`--weight-transfer-config '{"backend": "nccl"}'`.
+By default vLLM uses 80% of inference GPU memory to leave room for NCCL weight
+updates; adjust this with `--vllm-gpu-memory-utilization` if needed.
+

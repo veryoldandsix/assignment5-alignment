@@ -166,3 +166,6 @@ cython_debug/
 #.idea/
 
 *.DS_Store
+
+# Local training outputs, including large model checkpoints.
+/runs/

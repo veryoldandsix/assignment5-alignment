@@ -7,8 +7,11 @@ import json
 import logging
 import os
 import signal
+import socket
 import subprocess
+import sys
 import time
+import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -16,6 +19,10 @@ from dataclasses import dataclass
 import torch
 
 logger = logging.getLogger(__name__)
+
+# The inference server is reached directly, even when the training environment
+# configures an HTTP proxy for downloading models.
+_HTTP_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 @dataclass
@@ -29,12 +36,13 @@ class VLLMCompletion:
 class VLLMServer:
     model_id: str
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 0
     gpu: int = 1
     seed: int = 0
     load_format: str = "auto"
     logging_level: str = "ERROR"
-    gpu_memory_utilization: float = 0.9
+    # Leave room for NCCL and temporary buffers used during weight updates.
+    gpu_memory_utilization: float = 0.8
     launch_server: bool = True
     startup_timeout: int = 600
     shutdown_timeout: int = 30
@@ -46,7 +54,8 @@ class VLLMServer:
 
     def start(self) -> None:
         if self.launch_server:
-            kill_existing_vllm_server(self.port)
+            self.port = _get_available_port(self.host, self.port)
+            self.base_url = f"http://{self.host}:{self.port}"
             self.process = start_server(
                 model_id=self.model_id,
                 host=self.host,
@@ -58,7 +67,13 @@ class VLLMServer:
                 gpu_memory_utilization=self.gpu_memory_utilization,
             )
             atexit.register(self.stop)
-        wait_for_server(self.base_url, self.process, self.startup_timeout)
+        elif self.port == 0:
+            raise ValueError("An explicit port is required when launch_server=False.")
+        try:
+            wait_for_server(self.base_url, self.process, self.startup_timeout)
+        except Exception:
+            self.stop()
+            raise
 
     def stop(self) -> None:
         stop_server(self.process, timeout=self.shutdown_timeout)
@@ -95,22 +110,24 @@ def _http_json(method: str, url: str, payload: dict | None = None, timeout: int 
         method=method,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with _HTTP_OPENER.open(request, timeout=timeout) as response:
         body = response.read()
     if not body:
         return {}
     return json.loads(body)
 
 
-def kill_existing_vllm_server(port: int) -> None:
-    pattern = f"vllm serve .* --port {port}"
+def _get_available_port(host: str, port: int) -> int:
+    """Choose a free port, or reject an explicitly requested port in use."""
     try:
-        result = subprocess.run(["pkill", "-TERM", "-f", pattern], check=False)
-        if result.returncode == 0:
-            time.sleep(2)
-            subprocess.run(["pkill", "-KILL", "-f", pattern], check=False)
-    except FileNotFoundError:
-        pass
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+            listener.bind((host, port))
+            return listener.getsockname()[1]
+    except OSError as exc:
+        raise RuntimeError(
+            f"Cannot bind vLLM to {host}:{port}: {exc}. "
+            "Choose a free port, or use port=0 to select one automatically."
+        ) from exc
 
 
 def start_server(
@@ -121,14 +138,16 @@ def start_server(
     seed: int,
     load_format: str,
     logging_level: str,
-    gpu_memory_utilization: float = 0.9,
+    gpu_memory_utilization: float = 0.8,
 ) -> subprocess.Popen:
     env = os.environ.copy()
     env["CUDA_VISIBLE_DEVICES"] = str(gpu)
     env["VLLM_SERVER_DEV_MODE"] = "1"
     env["VLLM_LOGGING_LEVEL"] = logging_level
     command = [
-        "vllm",
+        sys.executable,
+        "-m",
+        "vllm.entrypoints.cli.main",
         "serve",
         model_id,
         "--host",
@@ -153,14 +172,32 @@ def start_server(
     return subprocess.Popen(command, env=env, start_new_session=True)
 
 
+def _get_inference_world_size(base_url: str) -> int:
+    try:
+        response = _http_json("GET", f"{base_url}/get_world_size", timeout=10)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            raise RuntimeError(
+                f"{base_url} does not expose vLLM's /get_world_size endpoint. "
+                "Check that this address belongs to the intended vLLM server, "
+                "started with VLLM_SERVER_DEV_MODE=1 and NCCL weight transfer enabled."
+            ) from exc
+        raise
+    world_size = response.get("world_size")
+    if type(world_size) is not int or world_size < 1:
+        raise RuntimeError(f"Invalid inference world_size from {base_url}: {response!r}.")
+    return world_size
+
+
 def wait_for_server(base_url: str, process: subprocess.Popen | None, timeout: int) -> None:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if process is not None and process.poll() is not None:
             raise RuntimeError(f"vLLM server exited early with code {process.returncode}.")
         try:
-            with urllib.request.urlopen(f"{base_url}/health", timeout=5):
-                return
+            _http_json("GET", f"{base_url}/health", timeout=5)
+            _get_inference_world_size(base_url)
+            return
         except OSError:
             time.sleep(2)
     raise TimeoutError(f"Timed out waiting for vLLM server at {base_url}.")
@@ -221,10 +258,11 @@ def generate_completions( #请求生成回答
 
 
 def init_weight_sync(vllm_base_url: str, policy_device: str):
+    inference_world_size = _get_inference_world_size(vllm_base_url)
+
     from vllm.distributed.weight_transfer.nccl_engine import NCCLWeightTransferEngine
     from vllm.utils.network_utils import get_ip, get_open_port
 
-    inference_world_size = _http_json("GET", f"{vllm_base_url}/get_world_size", timeout=10)["world_size"]
     world_size = inference_world_size + 1
     master_address = get_ip()
     master_port = get_open_port()
@@ -264,11 +302,18 @@ def sync_policy_weights(policy: torch.nn.Module, vllm_base_url: str, weight_sync
     )
 
     weights = list(policy.named_parameters())
+    # vLLM defaults to two 1 GiB packing buffers. Smaller batches keep weight
+    # updates from exhausting memory alongside the inference KV cache.
+    transfer_options = {
+        "packed": True,
+        "packed_buffer_size_bytes": 64 * 1024 * 1024,
+        "packed_num_buffers": 2,
+    }
     update_info = {
         "names": [name for name, _ in weights],
         "dtype_names": [str(tensor.dtype).split(".")[-1] for _, tensor in weights],
         "shapes": [list(tensor.shape) for _, tensor in weights],
-        "packed": True,
+        **transfer_options,
     }
 
     torch.cuda.set_device(next(policy.parameters()).device)
@@ -285,7 +330,7 @@ def sync_policy_weights(policy: torch.nn.Module, vllm_base_url: str, weight_sync
             iterator=iter(weights),
             trainer_args=NCCLTrainerSendWeightsArgs(
                 group=weight_sync_group,
-                packed=True,
+                **transfer_options,
             ),
         )
         update_future.result()

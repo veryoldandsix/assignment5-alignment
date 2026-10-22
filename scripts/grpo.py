@@ -113,6 +113,7 @@ def make_parser() -> argparse.ArgumentParser:
     parser.add_argument("--eval-every", type=int, default=10)
     parser.add_argument("--log-rollouts-every", type=int, default=40)
     parser.add_argument("--generation-batch-size", type=int, default=64)
+    parser.add_argument("--vllm-gpu-memory-utilization", type=float, default=0.8)
     parser.add_argument("--wandb-project", default=None)
     return parser
 
@@ -127,6 +128,8 @@ def main() -> None:
         raise ValueError("rollout-batch-size must be divisible by group-size.")
     if args.eval_every < 1 or args.log_rollouts_every < 1:
         raise ValueError("Logging intervals must be positive.")
+    if not 0 < args.vllm_gpu_memory_utilization < 1:
+        raise ValueError("vllm-gpu-memory-utilization must be between 0 and 1.")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     (args.output_dir / "config.json").write_text(
@@ -160,7 +163,13 @@ def main() -> None:
             config=json.loads(json.dumps(vars(args), default=str)),
         )
 
-    server = VLLMServer(model_id=args.model_name_or_path, gpu=1, seed=args.seed, startup_timeout=1800)
+    server = VLLMServer(
+        model_id=args.model_name_or_path,
+        gpu=1,
+        seed=args.seed,
+        startup_timeout=1800,
+        gpu_memory_utilization=args.vllm_gpu_memory_utilization,
+    )
     metrics_path = args.output_dir / "metrics.jsonl"
     samples_path = args.output_dir / "rollouts.jsonl"
     try:

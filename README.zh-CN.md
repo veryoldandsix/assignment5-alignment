@@ -120,6 +120,16 @@ uv run --extra gpu pytest tests/test_grpo.py -k 'tokenize_prompt_and_output or g
 uv run --extra gpu python scripts/grpo.py --output-dir runs/grpo-seed-0 --seed 0
 ```
 
+脚本会自动选择空闲端口启动 vLLM，并同时检查 `/health` 和权重同步接口。
+如果日志显示 `/get_world_size` 返回 404，通常是连到了其他服务，或目标 vLLM
+没有开启开发接口；仅 `/health` 成功并不能证明目标是 vLLM。
+手动连接已有服务时，需用 `VLLMServer(launch_server=False, port=实际端口)`，并确保
+该服务启动时设置了 `VLLM_SERVER_DEV_MODE=1` 和
+`--weight-transfer-config '{"backend": "nccl"}'`。
+默认 vLLM 显存比例为 `0.8`，给 NCCL 权重同步留出空间；可通过
+`--vllm-gpu-memory-utilization` 调整。权重传输使用 64 MiB 的分包目标，避免
+vLLM 默认的 GiB 级传输缓冲与推理缓存一起耗尽显存。
+
 可以用 `--model-name-or-path` 指定 HF 模型 ID 或本地模型目录，用 `--prompt-file`、`--train-file`、`--val-file` 替换输入。先查看全部可调参数：
 
 ```sh
